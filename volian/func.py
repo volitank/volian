@@ -17,24 +17,19 @@
 # along with volian.  If not, see <https://www.gnu.org/licenses/>.
 
 from subprocess import run
-from os.path import exists
-import logging
-from const import ESP_SIZE_M, BOOT_SIZE_M, MIRROR_LIST
 from math import trunc
 from pathlib import Path
 from getpass import getpass
 
-eprint = logging.error
-vprint = logging.info
-wprint = logging.warning
+from constant import ESP_SIZE_M, BOOT_SIZE_M
+from logger import eprint, wprint
 
 def choose_disk():
 	run(["lsblk", "--exclude", "7"])
 	while True:
 		disk = input("Which disk you would like to use? /dev/")
-		if exists(f"/dev/{disk}"):
+		if Path.exists(f"/dev/{disk}"):
 			return disk
-			break
 		else:
 			eprint(f"/dev/{disk} doesn't exist")
 
@@ -73,6 +68,7 @@ def byte_to_sector(byte: int):
 	return sector
 
 def filter_input(unknown):
+	'convert input to byte from meg or gig'
 	try:
 		if 'M' in unknown:
 			return int(meg_to_byte(float(unknown.rstrip('M'))))
@@ -95,11 +91,11 @@ def ask_part(part, size):
 			if filter_input(human_part_size):
 				part_size = filter_input(human_part_size)
 				if part_size > size:
-					wprint(f"{human_part_size} GB is more than you have left.. try again")
+					eprint(f"{human_part_size} GB is more than you have left.. try again")
 				else:
 					return part_size, (size - part_size)
 		except ValueError:
-			wprint(f"that isn't a valid number")
+			eprint(f"that isn't a valid number")
 
 def define_part(disk, no_part: bool=False):
 	true_size = (float(Path(f"/sys/block/{disk}/size").read_text()) * 512)
@@ -143,6 +139,7 @@ def print_layout(root, home, var, usr):
 	print("\nDisk layout:")
 	print(f"/efi \t\t{byte_to_gig_trunc(ESP_SIZE_M)} GB")
 	print(f"/boot/efi \t{byte_to_gig_trunc(BOOT_SIZE_M)} GB")
+
 	if root == '100%FREE':
 		print(f"/ \t\t{root}")
 	else:	
@@ -172,30 +169,13 @@ def get_password():
 		password = getpass("password:")
 		confirmpass = getpass("confirm password:")
 		if password == confirmpass:
-			vprint("passwords match")
+			print("passwords match")
 			return password
 		del password
 		eprint("passwords don't match! try again.")
 
-def lv_create(part, name, volume):
-	if part != '100%FREE':
-		print(f'creating logical volume "{name}" with {byte_to_gig_trunc(part)} GB')
-		run(["sudo", "lvcreate", "-n", f"{name}", "-L", f"{part}b", f"{volume}"]).check_returncode()
-	else:
-		print(f'creating logical volume "{name}" with the rest of your free space')
-		run(["sudo", "lvcreate", "-n", f"{name}", "-l", f"{part}", f"{volume}"]).check_returncode()
-	print(f'creating ext4 on /dev/{volume}/{name}')
-	run(["sudo", "mkfs.ext4", "-F", "-q", f"/dev/{volume}/{name}"]).check_returncode()
-
-def mirror_url():
-	while True:
-		sum = -1
-		for mirror in MIRROR_LIST:
-			sum = sum +1
-			print(f"{sum} {mirror}")
-		resp = int(input("please select the number of the mirror you would like to use: "))
-		if resp in range(0, 30):
-			url = MIRROR_LIST[resp]
-			return url
-		else:
-			print("That choice wasn't on the list.")
+def main():
+	eprint("func isn't intended to be run directly.. exiting")
+	exit(1)
+if __name__ == "__main__":
+	main()
