@@ -116,11 +116,11 @@ PROMPT_COMMAND=__prompt_command    # Function to generate PS1 after CMDs
 
 # This function controls drawing our prompt
 __prompt_command() {
-    local EXIT="$?"                # This needs to be first
+	local EXIT="$?"                # This needs to be first
 
 	# Prints a new line (\n) if one didn't exist
 	# Not harmful either way, but can be annoying
-    PS1='$(printf "%$((COLUMNS-1))s\r")'
+	PS1='$(printf "%$((COLUMNS-1))s\r")'
 	# Uncomment this to disable printing new line
 	#PS1=''
 

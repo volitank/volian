@@ -16,9 +16,13 @@
 # You should have received a copy of the GNU General Public License
 # along with volian.  If not, see <https://www.gnu.org/licenses/>.
 
+if __name__ == "__main__":
+	print("partition isn't intended to be run directly.. exiting")
+	exit(1)
+
 from time import sleep
 from constant import DEBIAN_ORG
-from func import ask
+from utils import ask, ask_list
 from logger import eprint, wprint
 
 ## Notes on how to use this module.
@@ -70,27 +74,6 @@ def get_country_list(master_list, arch):
 		country_list = list(country_set)
 		country_list.sort()
 	return country_list
-
-def ask_list(ask_list, name):
-	'Takes either url_list or country list'
-	while True:
-		sum = -1
-		for item in ask_list:
-			sum = sum +1
-			print(f"{sum} {item}".rstrip())
-		try:
-			resp = int(input(f"please select the number of the {name} you would like to use: "))
-			if resp in range(0, len(ask_list)):
-				return ask_list[resp]
-			else:
-				eprint("That choice wasn't on the list.. Trying again")
-				sleep(2)
-		except ValueError as e:
-			eprint("\nchoice must be a number.. Trying again")
-			sleep(2)
-		except IndexError as e:
-			eprint("\nthat choice wasn't in the list.. Trying again")
-			sleep(2)
 
 def get_url_list(master_list, country, arch):
 	'Takes our initally parsed mirror list and returns a list of urls in the country we choose'

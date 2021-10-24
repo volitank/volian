@@ -18,88 +18,28 @@
 # You should have received a copy of the GNU General Public License
 # along with volian.  If not, see <https://www.gnu.org/licenses/>.
 
-import argparse
 from sys import stderr, argv
-from subprocess import run, PIPE, DEVNULL
+from subprocess import run, PIPE, DEVNULL, STDOUT
 from os import mkdir
 from pathlib import Path
 from shutil import copy, move
 from platform import machine
-from pydoc import pager
-from argparse import SUPPRESS
-from constant import (	APT_SOURCES, BACKUP_BASHRC, BOOT_DIR, VOLIAN_LOG, EFI, EFI_DIR, ESP_SIZE_M, BOOT_SIZE_M, EFI,
-								FSTAB_FILE, HOME_DIR, HOSTNAME_FILE, HOSTS_FILE, LINUX_BOOT, LINUX_LVM, RELEASE_OPTIONS, 
-								VIM_DEFAULT, VOLIAN_BASHRC, VOLIAN_VIM, ROOT_BASHRC, USER_BASHRC,
-								LOCALE_FILE, ROOT_DIR, USR_DIR, VAR_DIR, LICENSE
-								)
-
+from types import resolve_bases
+from constant import (	APT_SOURCES, BACKUP_BASHRC, BOOT_DIR, RESOLV_CONF, TARGET_RESOLV_CONF, VOLIAN_LOG, EFI, EFI_DIR, ESP_SIZE_M, BOOT_SIZE_M, EFI,
+						FSTAB_FILE, HOSTNAME_FILE, HOSTS_FILE, LINUX_BOOT, LINUX_LVM, RELEASE_OPTIONS, 
+						VIM_DEFAULT, VOLIAN_BASHRC, VOLIAN_VIM, ROOT_BASHRC, USER_BASHRC,
+						LOCALE_FILE, ROOT_DIR, LICENSE
+						)
 from mirror import choose_mirror, get_country_list, get_url_list, ask_list, parse_mirror_master
-from func import ask, choose_disk, define_part, print_layout, get_password
+from utils import ask, byte_to_gig_trunc, get_password
 from logger import eprint, vprint, wprint
-from partition import luks_format, mount, lv_create
-
-# Custom Parser for printing help on error.
-class volianParser(argparse.ArgumentParser):
-	def error(self, message):
-		stderr.write('error: %s\n' % message)
-		self.print_help()
-		exit(1) 
-
-# Custom Action for --release-options switch
-class releaseOptions(argparse.Action):
-	def __init__(self,
-			option_strings,
-			dest=SUPPRESS,
-			default=SUPPRESS,
-			help="show release options and exit"):
-		super(releaseOptions, self).__init__(
-			option_strings=option_strings,
-			dest=dest,
-			default=default,
-			nargs=0,
-			help=help)
-	def __call__(self, parser, args, values, option_string=None):
-		#setattr(args, self.dest, values)
-		print(RELEASE_OPTIONS)
-		parser.exit()
-
-# Custom Action for --license switch
-class GPLv3(argparse.Action):
-	def __init__(self,
-			option_strings,
-			dest=SUPPRESS,
-			default=SUPPRESS,
-			help='reads the GPLv3'):
-		super(GPLv3, self).__init__(
-			option_strings=option_strings,
-			dest=dest,
-			default=default,
-			nargs=0,
-			help=help)
-	def __call__(self, parser, args, values, option_string=None):
-		#setattr(args, self.dest, values)
-		with open(LICENSE, 'r') as file:
-			pager(file.read())
-		parser.exit()
+from partition import define_partitions, luks_format, mount, lv_create, sfdisk, mkfs, write_fstab
+from options import arg_parse
+from netcfg import initial_network_configuration, write_interface_file
 
 def main():
 
-	formatter = lambda prog: argparse.HelpFormatter(prog,
-													max_help_position=64)
-	bin_name = Path(argv[0]).name
-	version = 'v0.01'
-	parser = volianParser(	formatter_class=formatter,
-							usage=f'{bin_name} <distro> [--options]'
-							)
-
-	parser.add_argument('distro', choices=['ubuntu', 'debian'], metavar='<debian|ubuntu>')
-	parser.add_argument('--release', nargs='?', metavar='release', help='choose your distro release. stable is default for Debian. latest LTS for Ubuntu')
-	parser.add_argument('--no-part', action="store_true", help="using this switch will skip partitioning")
-	parser.add_argument('--minimal', action='store_true', help="uses the variant=minbase on the backend of debootstrap. Only use this if you're sure you want it")
-	parser.add_argument('--version', action='version', version=f'{bin_name} {version}')
-	parser.add_argument('--release-options', action=releaseOptions)
-	parser.add_argument('--license', action=GPLv3)
-
+	parser = arg_parse()
 	argument = parser.parse_args()
 	distro = argument.distro
 	no_part = argument.no_part
@@ -123,136 +63,86 @@ def main():
 	print('welcome to volian installer v.01')
 	input('press enter to continue..')
 
-	if not no_part:
+	# if --no-part isn't selected then we create our partitions.
+	wprint("this installer currently only supports configurations with lvm")
+	wprint("you may only use the entire disk")
+	wprint("NO mbr, efi only")
+	if not ask("Is that okay"):
+		print("this installer isn't good enough for you.. exiting..")
+		exit(0)
 
-		# if --no-part isn't selected then we create our partitions.
-		wprint("this installer currently only supports configurations with lvm")
-		wprint("You may only use the entire disk")
-		wprint("NO mbr, efi only")
-		wprint('In the event you want to make your own partitions for installation select "n"')
-		wprint("mount your partitions at /target, /target/boot, etc. then run ./installer.py --no-part")
-		if not ask("Is that okay"):
-			print("this installer isn't good enough for you.. exiting..")
-			exit(0)
 
-		while True:
-			disk = choose_disk()
-			root_size, home_size, var_size, usr_size = define_part(disk)
-			if [root_size, home_size, var_size, usr_size].count('100%FREE') < 2:
-				print_layout(root_size, home_size, var_size, usr_size)
-				if ask("Is this layout okay"):
-					# Maybe format things like this
-					# root_list = [root_size, 'root']
-					break
+	# # Example of what a network tupel will look like
+	# # ip, subnet, gateway, domain, search, nameserver, interface
+	# network_tuple = ('10.0.1.20', '/24', '10.0.1.1', 'volitank.com', 'volitank.com', '10.0.1.1', 'ens18')
+	network_tuple = initial_network_configuration()
+
+	# # Example of what a partition_list will look like
+	# part_list = [	(Path('/boot/efi'), 536870912, 'fat32', None), (Path('/boot'), 1610612736, 'ext2', None),
+	# 				(Path('/'), 21474836480, 'ext4', 'root'), (Path('/var'), 21474836480, 'ext4', 'var'),
+	# 				(Path('/srv/volicloud'), 21474836480, 'ext4', 'srv_volicloud'), (Path('/home'), '100%FREE', 'ext4', 'home')]
+	part_list, disk, space_left = define_partitions()
+
+	# Create our partitions
+	print(f'\ncreating partitions on {disk}')
+	sfdisk(part_list, disk, VOLIAN_LOG)
+
+	# Ask if we'll be encrypting, then format luks if we are.
+	if ask("do you want to ecrypt your system with luks?"):
+		luks_format()
+		pv_part = Path(f"/dev/mapper/{luks_name}")
+	else:
+		# Our pysical volume will be /dev/sdx3
+		pv_part = Path(str(disk)+'3')
+
+	# Create LVM
+	print("\ncreating physical volume and volume group")
+	# Create our physical volume on either our disk or luks container
+	with VOLIAN_LOG.open('a') as logfile:
+		run(["pvcreate", f"{pv_part}"], stdout=logfile, stderr=STDOUT).check_returncode()
+		# Create the volume group using the distro name as the vg name
+		run(["vgcreate", f"{volume}", f"{pv_part}"], stdout=logfile, stderr=STDOUT).check_returncode()
+
+	# Now time to create our Logical Volumes from our part_list
+	for part in part_list:
+		path, lv_size, fs, lv_name = part
+		# We don't need boot or efi, they aren't going to be lvm
+		if str(path) != '/boot/efi' and str(path) != '/boot':
+			print(f"creating logical volume {lv_name} with {byte_to_gig_trunc(lv_size)} GB")
+			lv_create(lv_size, lv_name, volume, logfile=VOLIAN_LOG)
+			print(f"making filesystem: {fs} on /dev/{volume}/{lv_name}")
+			mkfs(f"/dev/{volume}/{lv_name}", fs, logfile=VOLIAN_LOG)
+			# Time to start mounting. We need to check for root because we have to handle it a bit differently
+			# We're going to check if the mount point already exists, in reality it shouldn't.
+			if str(path) == '/':
+				if ROOT_DIR.exists():
+					eprint("/target already exists. stopping so we don't ruin anything")
+					exit(1)
+				ROOT_DIR.mkdir()
 			else:
-				eprint("you can't have 100%free defined twice.")
+				mount_path = ROOT_DIR / str(path).lstrip('/')
+				if mount_path.exists():
+					eprint(f"{mount_path} already exists. stopping so we don't ruin anything")
+					exit(1)
+				mount_path.mkdir()
+			print(f"mounting /dev/{volume}/{lv_name} to {mount_path}")
+			mount(f"/dev/{volume}/{lv_name}", mount_path, logfile=VOLIAN_LOG)
 
-		# Ask for luks or no
-		if ask("do you want to ecrypt your system with luks?"):
-			part_name = 'luks'
-		else:
-			part_name = 'lvm'
+	# Now that root and everything has been mounted we can do the boot and efi
+	print("making /boot and /boot/efi filesystems")
+	efi_part = Path(str(disk)+'1')
+	boot_part = Path(str(disk)+'2')
 
-		# Create our partitions
-		print(f'\ncreating partitions on /dev/{disk}')
-		run(['sudo', 'sfdisk', '--quiet', '--label', 'gpt', f"/dev/{disk}"], text=True, input=
-			# Format is <start>,<size>,<type>\n to separate entries
-			(f",{int(ESP_SIZE_M/512)},{EFI}\n"
-			+f",{int(BOOT_SIZE_M/512)},{LINUX_BOOT}\n"
-			+f",,{LINUX_LVM}")).check_returncode()
+	mkfs(efi_part, 'fat32', VOLIAN_LOG)
+	# part_list[1][2] should always be the fs we chose
+	mkfs(boot_part, part_list[1][2], VOLIAN_LOG)
 
-		efi_part = f'/dev/{disk}1'
-		boot_part = f'/dev/{disk}2'
+	print("mounting /boot and /boot/efi filesystems")
+	BOOT_DIR.mkdir()
+	mount(boot_part, BOOT_DIR, logfile=VOLIAN_LOG)
 
-		# If we're using luks encryption
-		if part_name == 'luks':
-			luks_format()
-			pv_part = f"/dev/mapper/{luks_name}"
-		else:
-			pv_part = f"/dev/{disk}3"
-
-		# Create LVM
-		print("\ncreating physical volume and volume group")
-		run(["sudo", "pvcreate", f"{pv_part}"]).check_returncode()
-		run(["sudo", "vgcreate", f"{volume}", f"{pv_part}"]).check_returncode()
-
-		# We need to handle everything that's not free first
-		if root_size != '100%FREE':
-			lv_create(root_size, 'root', volume)
-
-		if home_size is not None:
-			if home_size != '100%FREE':
-				lv_create(home_size, 'home', volume)
-
-		if var_size is not None:
-			if var_size != '100%FREE':
-				lv_create(var_size, 'var', volume)
-
-		if usr_size is not None:
-			if usr_size != '100%FREE':
-				lv_create(usr_size, 'usr', volume)
-
-		# Now whatever we have that is free can take up the rest of the LVM
-		if root_size == '100%FREE':
-			lv_create(root_size,'root', volume)
-
-		if home_size == '100%FREE':
-			lv_create(home_size, 'home', volume)
-
-		if var_size == '100%FREE':
-			lv_create(var_size, 'var', volume)
-
-		if usr_size == '100%FREE':
-			lv_create(usr_size, 'usr', volume)
-
-		# Make filesystems
-		print("making /boot and /boot/efi filesystems")
-		run(["sudo", "mkfs.fat", "-F32", f"/dev/{disk}1"], stdout=DEVNULL, stderr=DEVNULL).check_returncode()
-		run(["sudo", "mkfs.ext2", "-F", "-q", f"/dev/{disk}2"]).check_returncode()
-
-		ROOT_DIR = Path('/target')
-		if ROOT_DIR.exists():
-			eprint("/target already exists. stopping so we don't ruin anything")
-			exit(1)
-		else:
-			ROOT_DIR.mkdir()
-
-		print("mounting volumes")
-		mount(f"/dev/{volume}/root", ROOT_DIR, logfile=VOLIAN_LOG)
-
-		BOOT_DIR.mkdir()
-		mount(f"/dev/{disk}2", BOOT_DIR, logfile=VOLIAN_LOG)
-
-		EFI_DIR.mkdir()
-		mount(f"/dev/{disk}1", EFI_DIR, logfile=VOLIAN_LOG)
-
-		if home_size is not None:
-			HOME_DIR.mkdir()
-			mount(f"/dev/{volume}/home", HOME_DIR, logfile=VOLIAN_LOG)
-
-		if var_size is not None:
-			VAR_DIR.mkdir()
-			mount(f"/dev/{volume}/var", VAR_DIR, logfile=VOLIAN_LOG)
-
-		if usr_size is not None:
-			USR_DIR.mkdir()
-			mount(f"/dev/{volume}/usr", USR_DIR, logfile=VOLIAN_LOG)
-
-	if no_part:
-		print("if we don't partition for you it makes it hard to understand what to do")
-		print("with this we assume efi is on sdx1 and boot is on sdx2")
-		print("lvm is still the only supported method")
-		if ask("is all of this okay"):
-			print("\nif you want to configure more than /home, /var and /usr separately")
-			print("then we will require you to create your own /etc/fstab")
-			if ask("should we generate the /etc/fstab for you"):
-				disk = choose_disk()
-				root, home, var, usr = define_part(disk, no_part=True)
-			else:
-				fstab = False
-		else:
-			print("this installer isn't good enough for you.. exiting..")
-			exit(0)
+	EFI_DIR.mkdir()
+	mount(efi_part, EFI_DIR, logfile=VOLIAN_LOG)
 
 	# Now we need to do our installation
 	# Handle what direction we go in with debootstrap
@@ -298,48 +188,22 @@ def main():
 	with open(VOLIAN_LOG, 'wb') as logfile:
 		print(f'initial bootstrapping log can be found at {VOLIAN_LOG}')
 		if argument.minimal:
-			run(["debootstrap", "--variant-minbase", f"{release}", f"{ROOT_DIR}", f"http://{url}/{distro}"], stdout=logfile, stderr=logfile).check_returncode()
+			run(["debootstrap", "--variant-minbase", f"{release}", f"{ROOT_DIR}", f"http://{url}/{distro}"], stdout=logfile, stderr=STDOUT).check_returncode()
 		else:
-			run(["debootstrap", f"{release}", f"{ROOT_DIR}", f"http://{url}/{distro}"], stdout=logfile, stderr=logfile).check_returncode()
+			run(["debootstrap", f"{release}", f"{ROOT_DIR}", f"http://{url}/{distro}"], stdout=logfile, stderr=STDOUT).check_returncode()
 	print('initial bootstrapping complete')
 
 	# Let's write our sources.list
 	with open(APT_SOURCES, 'w') as file:
 		file.write(sources_list)
-		if distro == 'debian' and release != 'sid':
-			file.write(sources_nosid)
+		if distro == 'debian':
+			if release != 'sid' and release != 'unstable':
+				file.write(sources_nosid)
 
-	if fstab:
-		efi_uuid = run(["blkid", f"/dev/{disk}1", "--output", "value"], stdout=PIPE).stdout.decode().split()[0]
-		boot_uuid = run(["blkid", f"/dev/{disk}2", "--output", "value"], stdout=PIPE).stdout.decode().split()[0]
-		
-		# Time to write our fstab
-		with open(FSTAB_FILE, 'w') as file:
-			tab = '\t'
-			fstab_header = (
-			"# /etc/fstab: static file system information.\n"
-			"#\n"
-			"# Use 'blkid' to print the universally unique identifier for a\n"
-			"# device; this may be used with UUID= as a more robust way to name devices\n"
-			"# that works even if disks are added and removed. See fstab(5).\n"
-			"#\n"
-			f"# <file system>{tab*7}<mount point>\t<type>\t<options>{tab*4}<dump>\t<pass>\n"
-			f"/dev/mapper/{volume}-root{tab*6}/{tab*3}ext4\terrors=remount-ro\t\t0\t\t1\n"
-			)
-
-			file.write(fstab_header)
-			# We only have one tab here cause UUID is a long boi for boot
-			if usr is not None:
-				file.write(f"/dev/mapper/{volume}-usr{tab*6}/usr\t\text4\tdefaults{tab*4}0\t\t2\n")
-			file.write(f"UUID={boot_uuid}\t/boot\t\text2\tdefaults{tab*4}0\t\t2\n")
-			file.write(f"UUID={efi_uuid}{tab*8}/boot/efi\tvfat\tumask=0077{tab*4}0\t\t1\n")
-			if home is not None:
-				file.write(f"/dev/mapper/{volume}-home{tab*6}/home\t\text4\tdefaults{tab*4}0\t\t2\n")
-			if var is not None:
-				file.write(f"/dev/mapper/{volume}-var{tab*6}/var\t\text4\tdefaults{tab*4}0\t\t2\n")
-			file.write(f"tmpfs{tab*10}/tmp\t\ttmpfs\tmode=1777,nosuid,nodev\t0\t\t0")
-			# Maybe we want to give an option for a swapfile not right now tho?
-			#"#/swapfile									none		swap	sw						0	0"
+	efi_uuid = run(["blkid", efi_part, "--output", "value"], stdout=PIPE).stdout.decode().split()[0]
+	boot_uuid = run(["blkid", efi_uuid, "--output", "value"], stdout=PIPE).stdout.decode().split()[0]
+	
+	write_fstab(boot_uuid, efi_uuid, volume, part_list)
 
 	# Let us copy volian customizations
 	copy(VOLIAN_BASHRC, ROOT_BASHRC)
@@ -362,6 +226,7 @@ def main():
 	hostname = 'volian\n'
 	with open(HOSTNAME_FILE, 'w') as file:
 		file.write(hostname)
+
 	# Define basic etc hosts file and write it
 	etc_hosts = (
 	'#etc/hosts\n'
@@ -377,9 +242,13 @@ def main():
 	with open(HOSTS_FILE, 'w') as file:
 		file.write(etc_hosts)
 
-## Ask and or create these.
-# /etc/network/interfaces, /etc/resolv.conf
+	# Copy installer resolve.conf
+	copy(RESOLV_CONF, TARGET_RESOLV_CONF)
 
+	# Generate configuration file. 
+	write_interface_file(network_tuple)
+
+	print('Everything is finished and you should now be able to chroot')
 ## Run These in the chroot when we get there
 # apt update
 # apt install makedev sudo lvm2 cryptsetup cryptsetup-initramfs grub-efi command-not-found

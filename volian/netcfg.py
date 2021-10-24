@@ -16,38 +16,57 @@
 # You should have received a copy of the GNU General Public License
 # along with volian.  If not, see <https://www.gnu.org/licenses/>.
 
-from genericpath import exists
-import os.path
-from subprocess import run, PIPE
-from shutil import copy, rmtree
-import sys
-import os
+if __name__ == "__main__":
+	print("netcfg isn't intended to be run directly.. exiting")
+	exit(1)
+
+from subprocess import run, PIPE, STDOUT
 import requests
 
-from func import ask
+from utils import ask, ask_list
 import re
 from time import sleep
 from subprocess import run
 from ipaddress import ip_interface, ip_address, ip_network
-
-from volian.constant import RESOLV_CONF, SUBNET_MASK_DICT
-from volian.logger import eprint, wprint
+from pathlib import Path
+from typing import TextIO
+from constant import RESOLV_CONF, SUBNET_MASK_DICT, VOLIAN_LOG, INTERFACES_FILE, INTERFACE_HEADER
+from logger import eprint, wprint
 
 # Initially we are only going to support ethernet.
 # I want to get this finished but wifi will be a feature we'll add in the future.
 
-interfaces = os.listdir('/sys/class/net/')
-
 def get_eth_list():
+	interfaces = Path('/sys/class/net/').iterdir()
 	'returns a list of ethernet interfaces'
 	eth_list = []
 	for inter in interfaces:
-		if inter.startswith('e'):
-			eth_list.append(inter)
+		if inter.name.startswith('e'):
+			eth_list.append(inter.name)
 		# Probably will leave this here until I implement wifi support
-		if inter.startswith('w'):
+		if inter.name.startswith('w'):
 			pass
 	return eth_list
+
+def define_interface():
+	# If less than 1 interface we can't really continue
+	eth_list = get_eth_list()
+	if len(eth_list) < 1:
+		eprint("looks like we don't have any ethernet devices..")
+		eprint("You need ethernet interface to continue.. exiting")
+		exit(1)
+
+	# Can't really test more than one at the moment, But I will soon.
+	# if we have more than one interface we need the user to choose the primary interface.
+	elif len(eth_list) > 1:
+		interface = ask_list(eth_list, 'interface')
+
+	else:
+		interface = eth_list[0]
+		print("there seems to be only one ethernet interface")
+		print(f"using ethernet {interface}")
+
+	return interface
 
 def test_network():
 	'returns true if we can contact debian'
@@ -135,19 +154,20 @@ def get_static_information():
 			else:
 				search = None
 			# Get dns information. Set to default if no
-			if ask("default is google dns 8.8.8.8\nwould you like to define a dns server"):
+			if ask(f"default is {gateway}\nwould you like to define a dns server"):
 				try:
 					while True:
 						try:
 							nameserver = ip_address(input("\nenter your dns server: "))
+							break
 						except AttributeError:
 							eprint("dns server isn't valid.. try again")
 							eprint("example: 8.8.8.8")
 				except KeyboardInterrupt:
-					nameserver = '8.8.8.8'
+					nameserver = gateway
 					wprint("exiting dns setup.. using default dns")
 			else:
-				nameserver = '8.8.8.8'
+				nameserver = gateway
 		# If we use Ctrl+C it will restart
 		except KeyboardInterrupt:
 			print("\nrestarting static configuration")
@@ -158,27 +178,9 @@ def get_static_information():
 		print("\nstatic configuration:\n")
 		print(f"ip address: {ip}\nsubnet mask: {subnet}\ngateway: {gateway}\ndomain: {domain}\nsearch: {search}")
 		if ask("are these settings correct"):
-			return ip, subnet, gateway, domain, search, nameserver
+			return str(ip), subnet, str(gateway), domain, search, str(nameserver)
 		else:
 			wprint("restarting")
-	
-def validate_ipv4(ip: str):
-	# Check if we have 3 octets and return False if not
-	if ip.count(".") == 3:
-		ip_adder = ip.split('.')
-		for octet in ip_adder:
-			# Make sure our octet is actually an integer
-			try:
-				octet = int(octet)
-			except ValueError:
-				return False
-			# Return false if our octet is outside the range
-			if octet < 0 or octet > 255:
-				return False
-		# If our for loop doesn't fail then we're good
-		return True
-	else:
-		return False
 
 def configure_static_network(interface, ip, subnet_mask, gateway, domain=None, search=None, nameserver='8.8.8.8'):
 	"""
@@ -189,33 +191,41 @@ def configure_static_network(interface, ip, subnet_mask, gateway, domain=None, s
 	Default nameserver will be Google 8.8.8.8
 	"""
 
-	run(["ip", "addr", "add", f"{ip}{subnet_mask}", "dev", f"{interface}"]).check_returncode
-	run(["ip", "link", "set", f"{interface}", "up"]).check_returncode
-	run(["ip", "route","add", "default", "via", f"{gateway}", "dev", f"{interface}"]).check_returncode
-
-	with open(RESOLV_CONF, 'w')as file:
-		file.write(f"nameserver {nameserver}")
+	ip_addr("add", ip+subnet_mask, "dev", interface)
+	ip_link("set", interface, "up")
+	ip_route("add", "default", "via", gateway, "dev", interface)
+	with RESOLV_CONF.open('w') as file:
+		file.write(f"nameserver {nameserver}\n")
 		if search is not False:
-			file.write(f"search {search}")
+			file.write(f"search {search}\n")
 
 	if test_network():
 		return True
 	else:
 		# Reverse configuration
-		run(["ip" "route", "del", f"{gateway}{subnet_mask}", "dev", f"{interface}"]).check_returncode
-		run(["ip", "link", "set", f"{interface}", "down"]).check_returncode
-		run(["ip", "addr", "del", f"{ip}{subnet_mask}", "dev", f"{interface}"]).check_returncode
+		try:
+			ip_route("del", gateway+subnet_mask, "dev", interface)
+		except:
+			eprint(f"failure removing gateway on {interface}")
+		try:
+			ip_link("set", interface, "down")
+		except:
+			eprint(f"failure setting {interface} down")
+		try:
+			ip_addr("del", ip+subnet_mask, "dev", interface)
+		except:
+			eprint(f"failure removing ip on {interface}")
 
 		# Check if the file exists and remove it. It should exist but ya know
-		if exists(RESOLV_CONF):
-			rmtree(RESOLV_CONF)
+		if RESOLV_CONF.exists():
+			RESOLV_CONF.unlink()
 
 		return False
 
 def configure_dhcp_network(interface):
 
 	# Attempt to configure network with dhcp
-	run([f"dhclient", "-1", f"{interface}"]).check_returncode
+	run([f"dhclient", "-1", f"{interface}"]).check_returncode()
 
 	if test_network():
 		return True
@@ -246,25 +256,85 @@ def configure_dhcp_network(interface):
 		
 		# Now we can put our variables to use
 		try:
-			run(["ip" "route", "del", f"{gateway}{subnet_mask}", "dev", f"{interface}"]).check_returncode
+			ip_route("del", gateway+subnet_mask, "dev", interface, logfile=VOLIAN_LOG)
 		except:
 			wprint("failed to remove default gateway")
 
 		try:
-			run(["ip", "link", "set", f"{interface}", "down"]).check_returncode
+			ip_link("set", interface, "down", logfile=VOLIAN_LOG)
 		except:
 			wprint("failed to shutdown interface")
 
 		try:
-			run(["ip", "addr", "del", f"{ip}{subnet_mask}", "dev", f"{interface}"]).check_returncode
+			ip_addr("del", ip+subnet_mask, "dev", interface, logfile=VOLIAN_LOG)
 		except:
 			wprint("failed to remove ip address")
 
 		# If resolve.conf exists we should probably remove it.
-		if exists(RESOLV_CONF):
-			rmtree(RESOLV_CONF)
+		if RESOLV_CONF.exists():
+			RESOLV_CONF.unlink()
 
 		return False
+
+def ip_addr(*args: str, logfile: TextIO=None):
+	"""Function for linux ip command.
+
+	Arguments:
+		args: any extra options you might want to pass.
+		logfile: expects a file such as file = open('/tmp/logfile', 'w')
+
+	example to mount readonly::
+
+	ip_addr('del', '10.0.20.1/24', 'del')
+	"""
+	commands = ["ip", "addr"]
+	for arg in args:
+		commands.append(arg)
+
+	if logfile is None:
+		run(commands).check_returncode()
+	else:
+		run(commands, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()
+
+def ip_link(*args: str, logfile: TextIO=None):
+	"""Function for linux ip command.
+
+	Arguments:
+		args: any extra options you might want to pass.
+		logfile: expects a file such as file = open('/tmp/logfile', 'w')
+
+	example to mount readonly::
+
+	ip_link('set', 'eth0', 'down')
+	"""
+	commands = ["ip", "link"]
+	for arg in args:
+		commands.append(arg)
+
+	if logfile is None:
+		run(commands).check_returncode()
+	else:
+		run(commands, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()
+
+def ip_route(*args: str, logfile: TextIO=None):
+	"""Function for linux ip command.
+
+	Arguments:
+		args: any extra options you might want to pass.
+		logfile: expects a file such as file = open('/tmp/logfile', 'w')
+
+	example to mount readonly::
+
+	ip_route('del', '10.0.1.1/24', 'dev', 'eth0')
+	"""
+	commands = ["ip", "route"]
+	for arg in args:
+		commands.append(arg)
+
+	if logfile is None:
+		run(commands).check_returncode()
+	else:
+		run(commands, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()
 
 def initial_network_configuration():
 	print()
@@ -277,44 +347,22 @@ def initial_network_configuration():
 		print("I get it, we're not good enough for you.. exiting..")
 		exit(0)
 
-	# If less than 1 interface we can't really continue
-	eth_list = get_eth_list()
-	if len(eth_list) < 1:
-		eprint("looks like we don't have any ethernet devices..")
-		eprint("You need ethernet interface to continue.. exiting")
-		exit(1)
-
-	# Can't really test more than one at the moment, But I will soon.
-	# if we have more than one interface we need the user to choose the primary interface.
-	elif len(eth_list) > 1:
-		while True:
-			sum = -1
-			for eth in eth_list:
-				sum = sum +1
-				print(f"{sum} {eth}")
-
-
-
-	else:
-		interface = eth_list[0]
-		print("there seems to be only one ethernet interface")
-		print(f"using ethernet {interface}")
-
 	# Begin the network process.
 	while True:
 
 		# Choose network interface
-		interface = None
+		interface = define_interface()
 
 		# Setup network
 		try:
-			if ask("y = dhcp\n n = static\nwould you like to setup the network using dhcp"):
+			if ask("y = dhcp\nn = static\nwould you like to setup the network using dhcp"):
 				if configure_dhcp_network(interface):
 					print("connection secured. continuing")
-					break
+					return 'dhcp', interface
 			else:
 				ip, subnet, gateway, domain, search, nameserver = get_static_information()
 				configure_static_network(interface, ip, subnet, gateway, domain, search, nameserver)
+				return ip, subnet, gateway, domain, search, nameserver, interface
 
 		except KeyboardInterrupt:
 			wprint("you must have a configured network to continue")
@@ -322,14 +370,31 @@ def initial_network_configuration():
 			sleep(2)
 			continue
 
+def write_interface_file(network_tuple):
+	if network_tuple[0] == 'dhcp':
+		static = False
+		mode = 'dhcp'
+	else:
+		ip, subnet_slash, gateway, domain, search, nameserver, interface = network_tuple
+		for Key, Value in SUBNET_MASK_DICT.items():
+			if Value == subnet_slash:
+				subnet = Key
+		mode = 'static'
+		static = True
 
-INTERFACE_HEADER = (
-"# This file describes the network interfaces available on your system\n"
-"# and how to activate them. For more information, see interfaces(5).\n"
-"\nsource /etc/network/interfaces.d/*\n")
-
-def main():
-	eprint("netcfg isn't intended to be run directly.. exiting")
-	exit(1)
-if __name__ == "__main__":
-	main()
+	write_interface = (
+	"\n# The primary network interface\n"
+	f"allow-hotplug {interface}\n"
+	f"iface {interface} inet {mode}\n")
+	
+	static_interface = (
+	f"\taddress {ip}\n"
+	f"\tnetmask {subnet}\n"
+	f"\tgateway {gateway}\n"
+	f"\tdns-namesever {nameserver}\n"
+	)	
+	with open(INTERFACES_FILE, 'w') as file:
+		file.write(INTERFACE_HEADER)
+		file.write(write_interface)
+		if static:
+			file.write(static_interface)

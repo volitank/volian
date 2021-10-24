@@ -60,7 +60,7 @@ exec --no-startup-id feh --bg-scale /home/volitank/Pictures/Mitsuha.png
 #exec --no-startup-id picom --experimental-backends -b
 
 #Open terminal on login. Mouse doesn't work unless something is opened
-exec --no-startup-id konsole
+exec konsole
 
 
 # KDE Audio Integration
