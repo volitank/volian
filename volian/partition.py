@@ -21,14 +21,15 @@ if __name__ == "__main__":
 	exit(1)
 
 from subprocess import run, STDOUT
-from sys import stderr, stdout
-from utils import byte_to_gig_trunc, ask, get_password, meg_to_byte, gig_to_byte, ask_list
-from logger import eprint 
-from constant import FILESYSTEMS, EFI, LINUX_BOOT, LINUX_LVM, FSTAB_FILE, FSTAB_HEADER
 from typing import TextIO, Union
+from collections import Counter
+from sys import stderr, stdout
 from pathlib import Path
 from time import sleep
-from collections import Counter
+
+from logger import eprint 
+from constant import FILESYSTEMS, EFI, LINUX_BOOT, LINUX_LVM, FSTAB_FILE, FSTAB_HEADER
+from utils import byte_to_gig_trunc, ask, get_password, meg_to_byte, gig_to_byte, ask_list
 
 def define_partitions():
 	"""Main function for defining partitions. Takes no arguments and returns a list of tuples, disk, and the space left on disk
@@ -136,7 +137,7 @@ def lv_create(part_size: Union[str, int] , name: str, volume: str, logfile: Text
 		commands.extend(["-l", f"{part_size}"])
 	else:
 		commands.extend(["-L", f"{part_size}b"])
-
+	commands.append("--yes")
 	commands.append(f"{volume}")
 	if logfile is None:
 		run(commands, stdout=stderr, stderr=stdout).check_returncode()
@@ -407,7 +408,7 @@ def mkfs(device: str, filesystem: str, logfile: TextIO=None):
 	else:
 		option = '-F'
 
-	commands = ["echo", f"mkfs.{filesystem}", f"{option}", f"{device}"]
+	commands = [f"mkfs.{filesystem}", f"{option}", f"{device}"]
 
 	print(f'creating {filesystem} on {device}')
 	if logfile is None:
@@ -443,9 +444,9 @@ def sfdisk(part_list: list, disk: str, logfile: TextIO=None):
 	for part in part_list:
 		path, size, fs, lv_name = part
 		if str(path) == '/boot/efi':
-			esp_size = size
+			esp_size = int(size / 512)
 		if str(path) == '/boot':
-			boot_size = size
+			boot_size = int(size /512)
 
 	commands = ['sfdisk', '--quiet', '--label', 'gpt', str(disk)]
 

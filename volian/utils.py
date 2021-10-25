@@ -20,12 +20,11 @@ if __name__ == "__main__":
 	print("utils isn't intended to be run directly.. exiting")
 	exit(1)
 
-from subprocess import run
-from math import trunc
-from pathlib import Path
 from getpass import getpass
-from logger import eprint, wprint
 from time import sleep
+from math import trunc
+
+from logger import eprint
 
 def ask(question):
 	"""resp = input(f'{question}? [Y/n]

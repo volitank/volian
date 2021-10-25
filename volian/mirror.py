@@ -20,10 +20,8 @@ if __name__ == "__main__":
 	print("partition isn't intended to be run directly.. exiting")
 	exit(1)
 
-from time import sleep
-from constant import DEBIAN_ORG
+from constant import DEBIAN_ORG, MIRROR_MASTER
 from utils import ask, ask_list
-from logger import eprint, wprint
 
 ## Notes on how to use this module.
 # arch = 'amd64'
@@ -43,7 +41,7 @@ from logger import eprint, wprint
 # ask_list(url_list, country, arch)
 
 def parse_mirror_master():
-	with open('Mirrors.masterlist', 'r') as mirror_list:
+	with open(MIRROR_MASTER, 'r') as mirror_list:
 		data = mirror_list.read()
 		# Split data into list by empty line
 		master_list = data.split('\n\n')
@@ -99,9 +97,3 @@ def choose_mirror(arch):
 	else:
 		url = DEBIAN_ORG
 		return url
-
-def main():
-	eprint("mirror isn't intended to be run directly.. exiting")
-	exit(1)
-if __name__ == "__main__":
-	main()

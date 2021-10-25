@@ -17,9 +17,10 @@
 # along with volian.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
+from pydoc import pager
 from pathlib import Path
 from sys import stderr, argv
-from pydoc import pager
+
 from constant import RELEASE_OPTIONS, LICENSE
 
 # Custom Parser for printing help on error.
@@ -79,7 +80,8 @@ def arg_parse():
 
 	parser.add_argument('distro', choices=['ubuntu', 'debian'], metavar='<debian|ubuntu>')
 	parser.add_argument('--release', nargs='?', metavar='release', help='choose your distro release. stable is default for Debian. latest LTS for Ubuntu')
-	parser.add_argument('--no-part', action="store_true", help="using this switch will skip partitioning")
+	# Taking out --no-part for now. We won't be using it at the moment and likely will remove it completely in the future. Not sure
+#	parser.add_argument('--no-part', action="store_true", help="using this switch will skip partitioning")
 	parser.add_argument('--minimal', action='store_true', help="uses the variant=minbase on the backend of debootstrap. Only use this if you're sure you want it")
 	parser.add_argument('--version', action='version', version=f'{bin_name} {version}')
 	parser.add_argument('--release-options', action=releaseOptions)

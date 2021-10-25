@@ -18,35 +18,31 @@
 # You should have received a copy of the GNU General Public License
 # along with volian.  If not, see <https://www.gnu.org/licenses/>.
 
-from sys import stderr, argv
-from subprocess import run, PIPE, DEVNULL, STDOUT
-from os import mkdir
-from pathlib import Path
+
+
+
+from subprocess import run, PIPE, STDOUT
 from shutil import copy, move
 from platform import machine
-from types import resolve_bases
-from constant import (	APT_SOURCES, BACKUP_BASHRC, BOOT_DIR, RESOLV_CONF, TARGET_RESOLV_CONF, VOLIAN_LOG, EFI, EFI_DIR, ESP_SIZE_M, BOOT_SIZE_M, EFI,
-						FSTAB_FILE, HOSTNAME_FILE, HOSTS_FILE, LINUX_BOOT, LINUX_LVM, RELEASE_OPTIONS, 
-						VIM_DEFAULT, VOLIAN_BASHRC, VOLIAN_VIM, ROOT_BASHRC, USER_BASHRC,
-						LOCALE_FILE, ROOT_DIR, LICENSE
-						)
-from mirror import choose_mirror, get_country_list, get_url_list, ask_list, parse_mirror_master
-from utils import ask, byte_to_gig_trunc, get_password
-from logger import eprint, vprint, wprint
-from partition import define_partitions, luks_format, mount, lv_create, sfdisk, mkfs, write_fstab
+from pathlib import Path
+
 from options import arg_parse
+from mirror import choose_mirror
+from logger import eprint, wprint
+from utils import ask, byte_to_gig_trunc
 from netcfg import initial_network_configuration, write_interface_file
+from partition import define_partitions, luks_format, mount, lv_create, sfdisk, mkfs, write_fstab
+from constant import (	APT_SOURCES, BACKUP_BASHRC, BOOT_DIR, RESOLV_CONF, TARGET_RESOLV_CONF, VOLIAN_LOG, EFI_DIR, EFI,
+						HOSTNAME_FILE, HOSTS_FILE, VIM_DEFAULT, VOLIAN_BASHRC, VOLIAN_VIM, ROOT_BASHRC, USER_BASHRC,
+						LOCALE_FILE, ROOT_DIR
+						)
 
 def main():
 
 	parser = arg_parse()
 	argument = parser.parse_args()
 	distro = argument.distro
-	no_part = argument.no_part
 	release = argument.release
-
-	# Define if we want to create an fstab
-	fstab = True
 	
 	# For now, by default our vg-group name will be the distro
 	# I have plans on making these configurable, but a lot in front of me right now
@@ -88,7 +84,7 @@ def main():
 	sfdisk(part_list, disk, VOLIAN_LOG)
 
 	# Ask if we'll be encrypting, then format luks if we are.
-	if ask("do you want to ecrypt your system with luks?"):
+	if ask("do you want to ecrypt your system with luks"):
 		luks_format()
 		pv_part = Path(f"/dev/mapper/{luks_name}")
 	else:
@@ -108,7 +104,11 @@ def main():
 		path, lv_size, fs, lv_name = part
 		# We don't need boot or efi, they aren't going to be lvm
 		if str(path) != '/boot/efi' and str(path) != '/boot':
-			print(f"creating logical volume {lv_name} with {byte_to_gig_trunc(lv_size)} GB")
+			try:
+				print(f"creating logical volume {lv_name} with {byte_to_gig_trunc(lv_size)} GB")
+			except:
+				print(f"creating logical volume {lv_name} with {byte_to_gig_trunc(space_left)} GB")
+
 			lv_create(lv_size, lv_name, volume, logfile=VOLIAN_LOG)
 			print(f"making filesystem: {fs} on /dev/{volume}/{lv_name}")
 			mkfs(f"/dev/{volume}/{lv_name}", fs, logfile=VOLIAN_LOG)
@@ -119,6 +119,7 @@ def main():
 					eprint("/target already exists. stopping so we don't ruin anything")
 					exit(1)
 				ROOT_DIR.mkdir()
+				mount_path = ROOT_DIR
 			else:
 				mount_path = ROOT_DIR / str(path).lstrip('/')
 				if mount_path.exists():
@@ -149,7 +150,7 @@ def main():
 	# And also build our sources.list
 	if distro == 'debian':
 		distro = "debian"
-		url = choose_mirror()
+		url = choose_mirror(arch)
 
 		if release is None:
 			print("debian release not selected. defaulting to stable")
@@ -201,7 +202,7 @@ def main():
 				file.write(sources_nosid)
 
 	efi_uuid = run(["blkid", efi_part, "--output", "value"], stdout=PIPE).stdout.decode().split()[0]
-	boot_uuid = run(["blkid", efi_uuid, "--output", "value"], stdout=PIPE).stdout.decode().split()[0]
+	boot_uuid = run(["blkid", boot_part, "--output", "value"], stdout=PIPE).stdout.decode().split()[0]
 	
 	write_fstab(boot_uuid, efi_uuid, volume, part_list)
 
@@ -210,6 +211,11 @@ def main():
 	move(USER_BASHRC, BACKUP_BASHRC)
 	copy(VOLIAN_BASHRC, USER_BASHRC)
 	copy(VOLIAN_VIM, VIM_DEFAULT)
+
+	exit()
+	# We need to install tasksel standard through the chroot before we do this.
+	# Put an exit statement here for now until I can do more testing.
+	# But this is well on it's way
 
 	# Update locale. Will be configurable eventually
 	locale = 'en_US.UTF-8 UTF-8\n'

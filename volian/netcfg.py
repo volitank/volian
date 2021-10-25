@@ -20,18 +20,17 @@ if __name__ == "__main__":
 	print("netcfg isn't intended to be run directly.. exiting")
 	exit(1)
 
+from ipaddress import ip_interface, ip_address, ip_network
 from subprocess import run, PIPE, STDOUT
+from typing import TextIO
+from pathlib import Path
+from time import sleep
 import requests
+import re
 
 from utils import ask, ask_list
-import re
-from time import sleep
-from subprocess import run
-from ipaddress import ip_interface, ip_address, ip_network
-from pathlib import Path
-from typing import TextIO
-from constant import RESOLV_CONF, SUBNET_MASK_DICT, VOLIAN_LOG, INTERFACES_FILE, INTERFACE_HEADER
 from logger import eprint, wprint
+from constant import RESOLV_CONF, SUBNET_MASK_DICT, VOLIAN_LOG, INTERFACES_FILE, INTERFACE_HEADER
 
 # Initially we are only going to support ethernet.
 # I want to get this finished but wifi will be a feature we'll add in the future.

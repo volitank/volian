@@ -15,12 +15,11 @@
 
 # You should have received a copy of the GNU General Public License
 # along with volian.  If not, see <https://www.gnu.org/licenses/>.
-from typing import Annotated
+
 if __name__ == "__main__":
 	print("constant isn't intended to be run directly.. exiting")
 	exit(1)
 
-from logger import eprint
 from pathlib import Path
 # Convert our paths into pathlib objects
 
@@ -40,9 +39,9 @@ files = here / 'files'
 LICENSE = files / 'LICENSE'
 VOLIAN_BASHRC = files / '.bashrc'
 VOLIAN_VIM = files / 'defaults.vim'
+MIRROR_MASTER = here / 'Mirrors.masterlist'
 
 # Host Files
-FSTAB_FILE = Path('/etc/fstab')
 INTERFACES_FILE = Path('/etc/network/interfaces')
 RESOLV_CONF = Path('/etc/resolv.conf')
 VOLIAN_LOG = Path('/tmp/volian.log')
@@ -58,6 +57,7 @@ HOSTS_FILE = Path('/target/etc/hosts')
 HOSTNAME_FILE = Path('/target/etc/hostname')
 TARGET_RESOLV_CONF = Path('/target/etc/resolv.conf')
 INTERFACES_FILE = Path('/target/etc/network/interfaces')
+FSTAB_FILE = Path('/target/etc/fstab')
 
 # Define chroot constants
 ROOT_DIR = Path('/target')
