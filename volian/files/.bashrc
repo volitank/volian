@@ -192,7 +192,8 @@ __prompt_command() {
 		PS1+="${host_color}\h" #\h=Host
 		PS1+="${line_color}]-[";
 		PS1+="${directory_color}\w"; # \w=Working directory
-		PS1+="${line_color}]\n└──╼ "; # \n=New Line
+		PS1+="${line_color}]\n"
+		PS1+="${line_color}└──╼ "; # \n=New Line
 		PS1+="${symbol}${reset}"
 	else
 		# If we don't have color support (Probably unlikely) we will draw a basic prompt

@@ -20,16 +20,14 @@ if __name__ == "__main__":
 	print("partition isn't intended to be run directly.. exiting")
 	exit(1)
 
-from subprocess import run, STDOUT
-from typing import TextIO, Union
 from collections import Counter
-from sys import stderr, stdout
 from pathlib import Path
 from time import sleep
 
+
 from logger import eprint 
 from constant import FILESYSTEMS, EFI, LINUX_BOOT, LINUX_LVM, FSTAB_FILE, FSTAB_HEADER
-from utils import byte_to_gig_trunc, ask, get_password, meg_to_byte, gig_to_byte, ask_list
+from utils import byte_to_gig_trunc, ask, get_password, meg_to_byte, gig_to_byte, ask_list, shell, DEFAULT
 
 def define_partitions():
 	"""Main function for defining partitions. Takes no arguments and returns a list of tuples, disk, and the space left on disk
@@ -123,31 +121,11 @@ def define_partitions():
 			sleep(2)
 			continue
 
-def lv_create(part_size: Union[str, int] , name: str, volume: str, logfile: TextIO=None):
-	"""Function for making a logical volume.
-
-	Arguments:
-		part_size: either 100%FREE or [int | str] number in bytes 
-		name: name of the logical volume. 'root' as an example
-		volume: name of the volume group the LV will belong too. 'debianvg' as an example
-		logfile: expects a file such as file = open('/tmp/logfile', 'w')
-	"""
-	commands = ["lvcreate", "-n", f"{name}"]
-	if part_size == '100%FREE':
-		commands.extend(["-l", f"{part_size}"])
-	else:
-		commands.extend(["-L", f"{part_size}b"])
-	commands.append("--yes")
-	commands.append(f"{volume}")
-	if logfile is None:
-		run(commands, stdout=stderr, stderr=stdout).check_returncode()
-	else:
-		run(commands, stdout=logfile.open('a'), stderr=logfile.open('a')).check_returncode()
-
 def choose_disk():
 	'Asks user for block device. Returns Path object'
 	# There may be a better way of getting disks that are applicable but for now this works.
-	data = run(["lsblk", "-pro", "NAME,TYPE,SIZE,MOUNTPOINT"], capture_output=True).stdout.decode().strip().split('\n')
+	#data = run(["lsblk", "-pro", "NAME,TYPE,SIZE,MOUNTPOINT"], capture_output=True).stdout.decode().strip().split('\n')
+	data = shell.lsblk._pro('NAME,TYPE,SIZE,MOUNTPOINT', logfile=DEFAULT, capture_output=True).stdout.decode().strip().split('\n')
 	for i in data:
 		if 'disk' in i:
 			print(i)
@@ -364,100 +342,3 @@ def write_fstab(boot_uuid: str, efi_uuid: str, volume: str, part_list: list):
 				str(_pass).ljust(2),
 				file=fstab_file
 				)
-
-def luks_format(device: str, luks_name: str, logfile: TextIO=None):
-	"""Function for encrypting a block device.
-
-	Arguments:
-		device: should be a block device as /dev/sdb2 or /dev/mapper/vg_name-lv_name
-		luks_name: what to name the container. 'root_crypt'
-		logfile: expects a file such as file = open('/tmp/logfile', 'w')
-	"""
-	# Create luks container
-	# Possible these should be separate functions
-	luks_pass = get_password()
-
-	luksFormat = ["cryptsetup", "luksFormat", "--hash=sha512", "--key-size=512", device]
-	luksOpen = ["cryptsetup", "open", device, luks_name]
-
-	print("formatting your luks volume..")
-	if logfile is None:
-		run(luksFormat, text=True, input=luks_pass).check_returncode()
-	else:
-		run(luksFormat, text=True, input=luks_pass, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()
-
-	print("opening luks volume..")
-	if logfile is None:
-		run(luksOpen, text=True, input=luks_pass).check_returncode()
-	else:
-		run(luksOpen, text=True, input=luks_pass, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()
-	del luks_pass
-
-def mkfs(device: str, filesystem: str, logfile: TextIO=None):
-	"""Function for making a filesystem.
-
-	Arguments:
-		device: should be a block device as /dev/sdb2 or /dev/mapper/vg_name-lv_name
-		filesystem: fat32, ext2, ext4 etc
-		logfile: expects a file such as file = open('/tmp/logfile', 'w')
-	"""
-
-	if filesystem == 'fat32':
-		option = '-F32'
-		filesystem = 'fat'
-	else:
-		option = '-F'
-
-	commands = [f"mkfs.{filesystem}", f"{option}", f"{device}"]
-
-	print(f'creating {filesystem} on {device}')
-	if logfile is None:
-		run(commands).check_returncode()
-	else:
-		run(commands, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()
-
-def mount(device: str, target: str,*args: str, logfile: TextIO=None):
-	"""Function for mounting a filesystem.
-
-	Arguments:
-		device: should be a block device as /dev/sdb2 or /dev/mapper/vg_name-lv_name
-		target: target path to mount the device such as /boot/efi
-		logfile: expects a file such as file = open('/tmp/logfile', 'w')
-		args: any extra options you might want to pass.
-
-	example to mount readonly::
-
-	mount('/dev/sda1', '/mnt/storage', '--options', 'ro')
-	"""
-	commands = ["mount"]
-	for arg in args:
-		commands.append(arg)
-	commands.extend([device, target])
-
-	if logfile is None:
-		run(commands).check_returncode()
-	else:
-		run(commands, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()
-
-def sfdisk(part_list: list, disk: str, logfile: TextIO=None):
-
-	for part in part_list:
-		path, size, fs, lv_name = part
-		if str(path) == '/boot/efi':
-			esp_size = int(size / 512)
-		if str(path) == '/boot':
-			boot_size = int(size /512)
-
-	commands = ['sfdisk', '--quiet', '--label', 'gpt', str(disk)]
-
-	parts = (
-		# Format is <start>,<size>,<type>\n to separate entries
-		f",{esp_size},{EFI}\n"
-		+f",{boot_size},{LINUX_BOOT}\n"
-		+f",,{LINUX_LVM}"
-		)
-
-	if logfile is None:
-		run(commands, text=True, input=parts).check_returncode()
-	else:
-		run(commands, text=True, input=parts, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()

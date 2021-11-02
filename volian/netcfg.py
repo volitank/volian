@@ -21,16 +21,14 @@ if __name__ == "__main__":
 	exit(1)
 
 from ipaddress import ip_interface, ip_address, ip_network
-from subprocess import run, PIPE, STDOUT
-from typing import TextIO
 from pathlib import Path
 from time import sleep
 import requests
 import re
 
-from utils import ask, ask_list
 from logger import eprint, wprint
-from constant import RESOLV_CONF, SUBNET_MASK_DICT, VOLIAN_LOG, INTERFACES_FILE, INTERFACE_HEADER
+from utils import ask, ask_list, shell, DEFAULT
+from constant import RESOLV_CONF, SUBNET_MASK_DICT, INTERFACES_FILE, INTERFACE_HEADER
 
 # Initially we are only going to support ethernet.
 # I want to get this finished but wifi will be a feature we'll add in the future.
@@ -190,9 +188,10 @@ def configure_static_network(interface, ip, subnet_mask, gateway, domain=None, s
 	Default nameserver will be Google 8.8.8.8
 	"""
 
-	ip_addr("add", ip+subnet_mask, "dev", interface)
-	ip_link("set", interface, "up")
-	ip_route("add", "default", "via", gateway, "dev", interface)
+	shell.ip.addr.add(ip+subnet_mask, "dev", interface)
+	shell.ip.link.set(interface, 'up')
+	shell.ip.route.add.default.via(gateway, 'dev', interface)
+
 	with RESOLV_CONF.open('w') as file:
 		file.write(f"nameserver {nameserver}\n")
 		if search is not False:
@@ -203,15 +202,15 @@ def configure_static_network(interface, ip, subnet_mask, gateway, domain=None, s
 	else:
 		# Reverse configuration
 		try:
-			ip_route("del", gateway+subnet_mask, "dev", interface)
+			shell.ip.route('del', gateway+subnet_mask, 'dev', interface)
 		except:
 			eprint(f"failure removing gateway on {interface}")
 		try:
-			ip_link("set", interface, "down")
+			shell.ip.link.set(interface, 'down')
 		except:
 			eprint(f"failure setting {interface} down")
 		try:
-			ip_addr("del", ip+subnet_mask, "dev", interface)
+			shell.ip.addr('del', ip+subnet_mask, 'dev', interface)
 		except:
 			eprint(f"failure removing ip on {interface}")
 
@@ -224,7 +223,7 @@ def configure_static_network(interface, ip, subnet_mask, gateway, domain=None, s
 def configure_dhcp_network(interface):
 
 	# Attempt to configure network with dhcp
-	run([f"dhclient", "-1", f"{interface}"]).check_returncode()
+	shell.dhclient._1(interface)
 
 	if test_network():
 		return True
@@ -235,7 +234,7 @@ def configure_dhcp_network(interface):
 		# We don't want this to hold us up if it does fail so we're going to wrap each of these in a try, except, pass
 		try:
 			# Get dhcp interfaces IP address so that we can remove it.
-			ip_parse = run(["ip", "addr", "show", "dev", f"{interface}"], stdout=PIPE).stdout.decode().split('\n')
+			ip_parse = shell.ip.addr.show.dev(interface, logfile=DEFAULT, capture_output=True).stdout.decode().split('\n')
 			for entry in ip_parse:
 				if 'inet' in entry and 'inet6' not in entry:
 					dhcp_ip_list = entry.split()[1].split("/")
@@ -246,7 +245,7 @@ def configure_dhcp_network(interface):
 	
 		try:
 			# Get the default gateway as well
-			default_gateway_parse = run(["ip", "route", "show", "dev", f"{interface}"], stdout=PIPE).stdout.decode().split('\n')
+			default_gateway_parse = shell.ip.route.show.dev(interface, logfile=DEFAULT, capture_output=True).stdout.decode().split('\n')
 			for entry in default_gateway_parse:
 				if 'default' in entry:
 					gateway = entry.split()[2]
@@ -255,17 +254,17 @@ def configure_dhcp_network(interface):
 		
 		# Now we can put our variables to use
 		try:
-			ip_route("del", gateway+subnet_mask, "dev", interface, logfile=VOLIAN_LOG)
+			shell.ip.route('del', gateway+subnet_mask, 'dev', interface)
 		except:
 			wprint("failed to remove default gateway")
 
 		try:
-			ip_link("set", interface, "down", logfile=VOLIAN_LOG)
+			shell.ip.link.set(interface, 'down')
 		except:
 			wprint("failed to shutdown interface")
 
 		try:
-			ip_addr("del", ip+subnet_mask, "dev", interface, logfile=VOLIAN_LOG)
+			shell.ip.addr('del', ip+subnet_mask, 'dev', interface)
 		except:
 			wprint("failed to remove ip address")
 
@@ -274,66 +273,6 @@ def configure_dhcp_network(interface):
 			RESOLV_CONF.unlink()
 
 		return False
-
-def ip_addr(*args: str, logfile: TextIO=None):
-	"""Function for linux ip command.
-
-	Arguments:
-		args: any extra options you might want to pass.
-		logfile: expects a file such as file = open('/tmp/logfile', 'w')
-
-	example to mount readonly::
-
-	ip_addr('del', '10.0.20.1/24', 'del')
-	"""
-	commands = ["ip", "addr"]
-	for arg in args:
-		commands.append(arg)
-
-	if logfile is None:
-		run(commands).check_returncode()
-	else:
-		run(commands, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()
-
-def ip_link(*args: str, logfile: TextIO=None):
-	"""Function for linux ip command.
-
-	Arguments:
-		args: any extra options you might want to pass.
-		logfile: expects a file such as file = open('/tmp/logfile', 'w')
-
-	example to mount readonly::
-
-	ip_link('set', 'eth0', 'down')
-	"""
-	commands = ["ip", "link"]
-	for arg in args:
-		commands.append(arg)
-
-	if logfile is None:
-		run(commands).check_returncode()
-	else:
-		run(commands, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()
-
-def ip_route(*args: str, logfile: TextIO=None):
-	"""Function for linux ip command.
-
-	Arguments:
-		args: any extra options you might want to pass.
-		logfile: expects a file such as file = open('/tmp/logfile', 'w')
-
-	example to mount readonly::
-
-	ip_route('del', '10.0.1.1/24', 'dev', 'eth0')
-	"""
-	commands = ["ip", "route"]
-	for arg in args:
-		commands.append(arg)
-
-	if logfile is None:
-		run(commands).check_returncode()
-	else:
-		run(commands, stdout=logfile.open('a'), stderr=STDOUT).check_returncode()
 
 def initial_network_configuration():
 	print()

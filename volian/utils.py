@@ -25,6 +25,10 @@ from time import sleep
 from math import trunc
 
 from logger import eprint
+from constant import VOLIAN_LOG
+from pyshell import pyshell, DEFAULT
+
+shell = pyshell(logfile=VOLIAN_LOG, check=True)
 
 def ask(question):
 	"""resp = input(f'{question}? [Y/n]
@@ -114,9 +118,3 @@ def get_password():
 			return password
 		del password
 		eprint("passwords don't match! try again.")
-
-def main():
-	eprint("func isn't intended to be run directly.. exiting")
-	exit(1)
-if __name__ == "__main__":
-	main()
