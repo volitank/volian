@@ -26,9 +26,9 @@ from options import arg_parse
 from mirror import choose_mirror
 from logger import eprint, wprint
 from partition import define_partitions, write_fstab
-from utils import ask, byte_to_gig_trunc, get_password, shell, DEFAULT
+from utils import ask, get_password, shell, DEFAULT
 from netcfg import initial_network_configuration, write_interface_file
-from constant import (	APT_SOURCES, BACKUP_BASHRC, BOOT_DIR, RESOLV_CONF, TARGET_RESOLV_CONF, VOLIAN_LOG, EFI_DIR, EFI,
+from constant import (	APT_SOURCES, BACKUP_BASHRC, RESOLV_CONF, TARGET_RESOLV_CONF, VOLIAN_LOG, EFI,
 						HOSTNAME_FILE, HOSTS_FILE, VIM_DEFAULT, VOLIAN_BASHRC, VOLIAN_VIM, ROOT_BASHRC, USER_BASHRC,
 						LOCALE_FILE, ROOT_DIR, LINUX_BOOT, LINUX_LVM
 						)
@@ -39,9 +39,7 @@ def main():
 	argument = parser.parse_args()
 	distro = argument.distro
 	release = argument.release
-	
-	# For now, by default our vg-group name will be the distro
-	# I have plans on making these configurable, but a lot in front of me right now
+
 	volume = distro
 	luks_name='root_crypt'
 
@@ -55,7 +53,6 @@ def main():
 	print('welcome to volian installer v.01')
 	input('press enter to continue..')
 
-	# if --no-part isn't selected then we create our partitions.
 	wprint("this installer currently only supports configurations with lvm")
 	wprint("you may only use the entire disk")
 	wprint("NO mbr, efi only")
@@ -63,26 +60,22 @@ def main():
 		print("this installer isn't good enough for you.. exiting..")
 		exit(0)
 
-
 	# # Example of what a network tupel will look like
 	# # ip, subnet, gateway, domain, search, nameserver, interface
 	# network_tuple = ('10.0.1.20', '/24', '10.0.1.1', 'volitank.com', 'volitank.com', '10.0.1.1', 'ens18')
 	network_tuple = initial_network_configuration()
 
-	# # Example of what a partition_list will look like
-	# part_list = [	(Path('/boot/efi'), 536870912, 'fat32', None), (Path('/boot'), 1610612736, 'ext2', None),
-	# 				(Path('/'), 21474836480, 'ext4', 'root'), (Path('/var'), 21474836480, 'ext4', 'var'),
-	# 				(Path('/srv/volicloud'), 21474836480, 'ext4', 'srv_volicloud'), (Path('/home'), '100%FREE', 'ext4', 'home')]
+	# Returns a Partition object. Class is defined in partition.py
 	part_list, disk, space_left = define_partitions()
 
 	# Create our partitions
 	print(f'\ncreating partitions on {disk}')
-	for part in part_list:
-		path, size, fs, lv_name = part
-		if str(path) == '/boot/efi':
-			esp_size = int(size / 512)
-		if str(path) == '/boot':
-			boot_size = int(size /512)
+	for partition in part_list:
+		# We have to convert the bytes to sectors
+		if partition.name == 'boot_efi':
+			esp_size = int(partition.size / 512)
+		if partition.name == 'boot':
+			boot_size = int(partition.size /512)
 
 	parts = (
 	# Format is <start>,<size>,<type>\n to separate entries
@@ -97,12 +90,12 @@ def main():
 	# Ask if we'll be encrypting, then format luks if we are.
 	if ask("do you want to ecrypt your system with luks"):
 		luks_pass = get_password()
-
+		luks_disk = Path(str(disk)+'3')
 		print("formatting your luks volume..")
-		shell.cryptsetup.luksFormat("--hash=sha512", "--key-size=512", disk, input=luks_pass)
+		shell.cryptsetup.luksFormat("--hash=sha512", "--key-size=512", luks_disk, input=luks_pass)
 
 		print("opening luks volume..")
-		shell.cryptsetup.open(disk, luks_name, luks_pass)
+		shell.cryptsetup.open(luks_disk, luks_name, luks_pass)
 
 		del luks_pass
 
@@ -118,65 +111,26 @@ def main():
 	shell.vgcreate(volume, pv_part)
 
 	# Now time to create our Logical Volumes from our part_list
-	for part in part_list:
-		path, lv_size, fs, lv_name = part
+	for partition in part_list:
 		# We don't need boot or efi, they aren't going to be lvm
-		if str(path) != '/boot/efi' and str(path) != '/boot':
-			try:
-				print(f"creating logical volume {lv_name} with {byte_to_gig_trunc(lv_size)} GB")
-			except:
-				print(f"creating logical volume {lv_name} with {byte_to_gig_trunc(space_left)} GB")
-
-			if lv_size == '100%FREE':
-				shell.lvcreate._n(lv_name, '-l', lv_size, '--yes', volume)
-			else:
-				shell.lvcreate._n(lv_name, '-L', f'{lv_size}b', '--yes', volume)
-
-			print(f"making filesystem: {fs} on /dev/{volume}/{lv_name}")
-			# Need to change some options if we're running fat
-			if fs == 'fat32':
-				option = '-F32'
-				fs = 'fat'
-			else:
-				option = '-F'
-			shell(f"mkfs.{fs}", option, f"/dev/{volume}/{lv_name}")
-
-			# Time to start mounting. We need to check for root because we have to handle it a bit differently
-			# We're going to check if the mount point already exists, in reality it shouldn't.
-			if str(path) == '/':
-				if ROOT_DIR.exists():
-					eprint("/target already exists. stopping so we don't ruin anything")
-					exit(1)
-				ROOT_DIR.mkdir()
-				mount_path = ROOT_DIR
-			else:
-				mount_path = ROOT_DIR / str(path).lstrip('/')
-				if mount_path.exists():
-					eprint(f"{mount_path} already exists. stopping so we don't ruin anything")
-					exit(1)
-				mount_path.mkdir()
-			print(f"mounting /dev/{volume}/{lv_name} to {mount_path}")
-			shell.mount(f"/dev/{volume}/{lv_name}", mount_path)
+		if partition.name != 'boot_efi' and partition.name != 'boot':
+			partition.lv_create(volume, space_left)
+			partition.mkfs(volume)
+			partition.mount(volume)
 
 	# Now that root and everything has been mounted we can do the boot and efi
 	print("making /boot and /boot/efi filesystems")
-	efi_part = Path(str(disk)+'1')
-	boot_part = Path(str(disk)+'2')
 
-	shell.mkfs.fat._F32(efi_part)
+	for partition in part_list:
+		if partition.name == 'boot':
+			partition.mkfs()
+			partition.mount()
 
-	# part_list[1][2] should always be the boot fs we chose
-	boot_fs = part_list[1][2]
-	if boot_fs == 'fat32':
-		shell.mkfs.fat._F32(boot_fs)
-	else:
-		shell(f"mkfs.{boot_fs}", "-F", boot_part)
-
-	print("mounting /boot and /boot/efi filesystems")
-	BOOT_DIR.mkdir()
-	shell.mount(boot_part, BOOT_DIR)
-	EFI_DIR.mkdir()
-	shell.mount(efi_part, EFI_DIR)
+	# We have to iterate this separately becuase boot has to be mounted before /boot/efi
+	for partition in part_list:
+		if partition.name == 'boot_efi':
+			partition.mkfs()
+			partition.mount()
 
 	# Now we need to do our installation
 	# Handle what direction we go in with debootstrap
@@ -219,12 +173,11 @@ def main():
 	print(f'starting installation of {distro} {release}.. this can take a while..')
 
 	# Start installation
-	with open(VOLIAN_LOG, 'wb') as logfile:
-		print(f'initial bootstrapping log can be found at {VOLIAN_LOG}')
-		if argument.minimal:
-			shell.debootstrap.__variant_minbase(release, ROOT_DIR, f"http://{url}/{distro}")
-		else:
-			shell.debootstrap(release, ROOT_DIR, f"http://{url}/{distro}")
+	print(f'initial bootstrapping log can be found at {VOLIAN_LOG}')
+	if argument.minimal:
+		shell.debootstrap.__variant_minbase(release, ROOT_DIR, f"http://{url}/{distro}")
+	else:
+		shell.debootstrap(release, ROOT_DIR, f"http://{url}/{distro}")
 	print('initial bootstrapping complete')
 
 	# Let's write our sources.list
@@ -234,8 +187,8 @@ def main():
 			if release != 'sid' and release != 'unstable':
 				file.write(sources_nosid)
 
-	efi_uuid = shell.blkid(efi_part, "--output", "value", logfile=DEFAULT, capture_output=True).stdout.decode().split()[0]
-	boot_uuid= shell.blkid(boot_part, "--output", "value", logfile=DEFAULT, capture_output=True).stdout.decode().split()[0]
+	efi_uuid = shell.blkid(Path(str(disk)+'1'), "--output", "value", logfile=DEFAULT, capture_output=True).stdout.decode().split()[0]
+	boot_uuid= shell.blkid(Path(str(disk)+'2'), "--output", "value", logfile=DEFAULT, capture_output=True).stdout.decode().split()[0]
 	write_fstab(boot_uuid, efi_uuid, volume, part_list)
 
 	# Let us copy volian customizations

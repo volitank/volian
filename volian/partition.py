@@ -21,12 +21,14 @@ if __name__ == "__main__":
 	exit(1)
 
 from collections import Counter
+from os import PathLike
 from pathlib import Path
 from time import sleep
+from typing import Union
 
 
 from logger import eprint 
-from constant import FILESYSTEMS, EFI, LINUX_BOOT, LINUX_LVM, FSTAB_FILE, FSTAB_HEADER
+from constant import FILESYSTEMS, EFI, LINUX_BOOT, LINUX_LVM, FSTAB_FILE, FSTAB_HEADER, ROOT_DIR, BOOT_DIR, EFI_DIR
 from utils import byte_to_gig_trunc, ask, get_password, meg_to_byte, gig_to_byte, ask_list, shell, DEFAULT
 
 def define_partitions():
@@ -48,14 +50,15 @@ def define_partitions():
 			space_left = true_size
 			# When using our installer defining root, esp and boot are not optional
 			# Tuple is (path, size, filesystem, lv_name)
-			esp_tuple, space_left = ask_part_size(Path('/boot/efi'), space_left)
-			boot_tuple, space_left = ask_part_size(Path('/boot/'), space_left)
-			root_tuple, space_left = ask_part_size(Path('/'), space_left)
+
+			esp_partition, space_left = ask_part_size(Path('/boot/efi'), space_left, disk)
+			boot_partition, space_left = ask_part_size(Path('/boot/'), space_left, disk)
+			root_partition, space_left = ask_part_size(Path('/'), space_left)
 
 			# Part list is going to be our list that we use for operations.
-			part_list = [esp_tuple, boot_tuple, root_tuple]
+			part_list = [esp_partition, boot_partition, root_partition]
 			# This list is only for making sure we aren't defining duplicate mount points.
-			_path_list = [esp_tuple[0], boot_tuple[0], root_tuple[0]]
+			_path_list = [esp_partition.path, boot_partition.path, root_partition.path]
 
 			if ask("Do you want to configure any custom partitions"):
 				while True:
@@ -77,13 +80,17 @@ def define_partitions():
 						break
 					
 					# Send the user defined path and the space we have left over to our part size function
-					new_part, space_left = ask_part_size(path, space_left)
+					new_partition, space_left = ask_part_size(path, space_left)
 
 					# Add that new partition to our list.
-					part_list.append(new_part)
+					part_list.append(new_partition)
 					part_list.sort
-					# Check if they just defined free more than once.
-					if str(part_list).count('100%FREE') > 1:
+
+					# Check if theydefined free more than once.
+					free_check = []
+					for partition in part_list:
+						free_check.append(partition.size)
+					if str(free_check).count('100%FREE') > 1:
 						print()
 						eprint("you can't have 100%free defined twice.")
 						eprint(f"restarting partitioner..\n")
@@ -110,7 +117,7 @@ def define_partitions():
 				# Iterate through the list and bring 100%FREE to the last
 				# We need free to be at the end for LVM creation
 				for n in range(0, len(part_list)):
-					if part_list[n][1] == '100%FREE':
+					if part_list[n].size == '100%FREE':
 						part_list.append(part_list.pop(n))
 				return part_list, disk, space_left
 
@@ -155,7 +162,7 @@ def filter_input(unknown):
 		eprint("Invalid input")
 		return False
 
-def ask_part_size(part_path: str, size: int):
+def ask_part_size(part_path: str, size: int, disk=None):
 	"""Function for determining if, and what size parts to make
 
 	Arguments:
@@ -179,30 +186,37 @@ def ask_part_size(part_path: str, size: int):
 					eprint(f"{human_part_size} GB is more than you have left.. try again")
 			else:
 				continue
-
 			# Now we can iterate through our paths an generate an LV name based on it
-			# We don't need boot or efi, they aren't going to be lvm
-			if str(part_path) != '/boot/efi' and str(part_path) != '/boot':
-				# Let us name root appropriately 
-				if str(part_path) == '/':
-					lv_name = 'root'
-				# Everything else will be named according to their path minus the first slash
-				# All remaining slashes will be replaced with an underscore '/srv/volian' becomes 'srv_volian'
-				else:
-					lv_name = str(part_path).lstrip('/').replace('/', '_')
+			# For boot_efi and boot these names are only for identification
+			# Let us name root appropriately 
+			if str(part_path) == '/':
+				lv_name = 'root'
+			# Incase someone tries to create a root home this won't break anything
+			if str(part_path) == '/root':
+				lv_name = 'roothome'
+			# Everything else will be named according to their path minus the first slash
+			# All remaining slashes will be replaced with an underscore '/srv/volian' becomes 'srv_volian'
 			else:
-				lv_name = False
+				lv_name = str(part_path).lstrip('/').replace('/', '_')
 
-			if str(part_path) == '/boot/efi':
+			# Handle our special efi and boot scenarios	
+			boot = None
+			efi = None
+
+			if lv_name == 'boot_efi':
+				efi = Path(str(disk)+'1')
 				filesystem = 'fat32'
 			else:
 				filesystem = ask_list(FILESYSTEMS, 'filesystem')
+			
+			if lv_name == 'boot':
+				boot = Path(str(disk)+'2')
 
-			part_tupe = (part_path, part_size, filesystem, lv_name)
+ 
 			try:
-				return part_tupe, (size - part_size)
+				return partition(part_path, part_size, filesystem, lv_name, efi, boot), (size - part_size)
 			except TypeError:
-				return part_tupe, size
+				return partition(part_path, part_size, filesystem, lv_name, efi, boot), size
 
 		except ValueError:
 			eprint(f"that isn't a valid number")
@@ -217,12 +231,12 @@ def print_part_layout(part_list: list, space_left: int):
 
 	column_list = []
 	# Iterate through our list
-	for part in part_list:
-		for item in part:
-			# Make a list of how big the strings are to be printed
-			length = len(str(item))
-			# Append them to our list
-			column_list.append(length)
+	for partition in part_list:
+		# Append the length of each string to our list
+		column_list.append(len(str(partition.name)))
+		column_list.append(len(str(partition.size)))
+		column_list.append(len(str(partition.path)))
+		column_list.append(len(str(partition.filesystem)))
 	# Define the width of our columns plus a pad using the largest size from our list
 	col_width = max(column_list) + 1
 
@@ -233,16 +247,15 @@ def print_part_layout(part_list: list, space_left: int):
 		"Size:".ljust(col_width),
 	)
 	# Iterate through the part list once more
-	for part in part_list:
-		path, size, fs, lv_name = part
+	for partition in part_list:
 		# If the size is free change it to remaining space
-		if size == '100%FREE':
-			size = space_left
+		if partition.size == '100%FREE':
+			partition.size = space_left
 		# Print our parts with our column width
 		print(
-			str(path).ljust(col_width),
-			str(fs).ljust(col_width),
-			str(byte_to_gig_trunc(size))+' GB'.ljust(col_width)
+			str(partition.path).ljust(col_width),
+			str(partition.filesystem).ljust(col_width),
+			str(byte_to_gig_trunc(partition.size))+' GB'.ljust(col_width)
 		)
 
 def write_fstab(boot_uuid: str, efi_uuid: str, volume: str, part_list: list):
@@ -342,3 +355,78 @@ def write_fstab(boot_uuid: str, efi_uuid: str, volume: str, part_list: list):
 				str(_pass).ljust(2),
 				file=fstab_file
 				)
+
+class partition(object):
+	def __init__(self,
+			path: PathLike, size: Union[int, str], 
+			filesystem: str, name: str,
+			efi: PathLike=None, boot: PathLike=None):
+		"""Object Representing a Partition
+
+		Arguments:
+			path: a pathlike object
+			size: Size of the partition in bytes
+			filesystem: The filesystem for the partition
+			name: The Logical Volume name, Root, Boot or ESP
+		"""
+		self.path = path
+		self.size = size
+		self.filesystem = filesystem
+		self.name = name
+		self.efi = efi # Path(str(disk)+'1')
+		self.boot = boot # Path(str(disk)+'2')
+
+	def lv_create(self, volume, space_left):
+		try:
+			print(f"creating logical volume {self.name} with {byte_to_gig_trunc(self.size)} GB")
+		except:
+			print(f"creating logical volume {self.name} with {byte_to_gig_trunc(space_left)} GB")
+
+		if self.size == '100%FREE':
+			shell.lvcreate._n(self.name, '-l', self.size, '--yes', volume)
+		else:
+			shell.lvcreate._n(self.name, '-L', f'{self.size}b', '--yes', volume)
+
+	def mkfs(self, volume: str=None):
+		device = f"/dev/{volume}/{self.name}"
+		# Need to change some options if we're running fat
+		if self.filesystem == 'fat32':
+			option = '-F32'
+			filesystem = 'fat'
+		else:
+			filesystem = self.filesystem
+			option = '-F'
+
+		if self.efi:
+			device = self.efi
+		if self.boot:
+			device = self.boot
+
+		print(f"making filesystem: {self.filesystem} on {device}")
+		shell(f"mkfs.{filesystem}", option, device)
+
+	def mount(self, volume: str=None):
+		device = f"/dev/{volume}/{self.name}"
+		if self.name == 'root':
+			if ROOT_DIR.exists():
+				eprint("/target already exists. stopping so we don't ruin anything")
+				exit(1)
+			ROOT_DIR.mkdir()
+			mount_path = ROOT_DIR
+
+		elif self.efi:
+			device = self.efi
+			EFI_DIR.mkdir()
+		elif self.boot:
+			device = self.boot
+			BOOT_DIR.mkdir()
+
+		else:
+			mount_path = ROOT_DIR / str(self.path).lstrip('/')
+			if mount_path.exists():
+				eprint(f"{mount_path} already exists. stopping so we don't ruin anything")
+				exit(1)
+			mount_path.mkdir()
+
+		print(f"mounting {device} to {mount_path}")
+		shell.mount(device, mount_path)
