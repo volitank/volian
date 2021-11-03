@@ -28,8 +28,8 @@ from typing import Union
 
 
 from logger import eprint 
-from constant import FILESYSTEMS, EFI, LINUX_BOOT, LINUX_LVM, FSTAB_FILE, FSTAB_HEADER, ROOT_DIR, BOOT_DIR, EFI_DIR
-from utils import byte_to_gig_trunc, ask, get_password, meg_to_byte, gig_to_byte, ask_list, shell, DEFAULT
+from constant import FILESYSTEMS, FSTAB_FILE, FSTAB_HEADER, ROOT_DIR, BOOT_DIR, EFI_DIR
+from utils import byte_to_gig_trunc, ask, meg_to_byte, gig_to_byte, ask_list, shell, DEFAULT
 
 def define_partitions():
 	"""Main function for defining partitions. Takes no arguments and returns a list of tuples, disk, and the space left on disk
@@ -56,9 +56,9 @@ def define_partitions():
 			root_partition, space_left = ask_part_size(Path('/'), space_left)
 
 			# Part list is going to be our list that we use for operations.
-			part_list = [esp_partition, boot_partition, root_partition]
+			part_list = [root_partition, boot_partition, esp_partition]
 			# This list is only for making sure we aren't defining duplicate mount points.
-			_path_list = [esp_partition.path, boot_partition.path, root_partition.path]
+			_path_list = [root_partition.path, boot_partition.path, esp_partition.path]
 
 			if ask("Do you want to configure any custom partitions"):
 				while True:
@@ -192,7 +192,7 @@ def ask_part_size(part_path: str, size: int, disk=None):
 			if str(part_path) == '/':
 				lv_name = 'root'
 			# Incase someone tries to create a root home this won't break anything
-			if str(part_path) == '/root':
+			elif str(part_path) == '/root':
 				lv_name = 'roothome'
 			# Everything else will be named according to their path minus the first slash
 			# All remaining slashes will be replaced with an underscore '/srv/volian' becomes 'srv_volian'
@@ -212,11 +212,11 @@ def ask_part_size(part_path: str, size: int, disk=None):
 			if lv_name == 'boot':
 				boot = Path(str(disk)+'2')
 
- 
+			part_object = partition(part_path, part_size, filesystem, lv_name, efi, boot)
 			try:
-				return partition(part_path, part_size, filesystem, lv_name, efi, boot), (size - part_size)
+				return part_object, (size - part_size)
 			except TypeError:
-				return partition(part_path, part_size, filesystem, lv_name, efi, boot), size
+				return part_object, size
 
 		except ValueError:
 			eprint(f"that isn't a valid number")
@@ -248,14 +248,16 @@ def print_part_layout(part_list: list, space_left: int):
 	)
 	# Iterate through the part list once more
 	for partition in part_list:
+		size = partition.size
 		# If the size is free change it to remaining space
 		if partition.size == '100%FREE':
-			partition.size = space_left
+			# We can't just use partition.size because we can't update the variable
+			size = space_left
 		# Print our parts with our column width
 		print(
 			str(partition.path).ljust(col_width),
 			str(partition.filesystem).ljust(col_width),
-			str(byte_to_gig_trunc(partition.size))+' GB'.ljust(col_width)
+			str(byte_to_gig_trunc(size))+' GB'.ljust(col_width)
 		)
 
 def write_fstab(boot_uuid: str, efi_uuid: str, volume: str, part_list: list):
@@ -269,16 +271,22 @@ def write_fstab(boot_uuid: str, efi_uuid: str, volume: str, part_list: list):
 	"""
 	fstab_list = [("# <file system>","<mount point>","<type>","<options>","<dump>","<pass>")]
 
-	for part in part_list:
-		path, size, fs, lv_name = part
-		if str(path) == '/':
-			iter_tupe = (f"/dev/mapper/{volume}-{lv_name}",str(path),fs,"errors=remount-ro","0","1")
-		elif str(path) == '/boot':
-			iter_tupe = (f"UUID={boot_uuid}",str(path),fs,"defaults","0","2")
-		elif str(path) == '/boot/efi':
-			iter_tupe = (f"UUID={efi_uuid}",str(path),"vfat","umask=0077","0","1")
+	# This should be fine to iterate because the first three should always be in this order
+	for partition in part_list:
+		if partition.name == 'root':
+			iter_tupe = (
+					f"/dev/mapper/{volume}-{partition.name}",
+					str(partition.path),partition.filesystem,"errors=remount-ro","0","1")
+		elif partition.name == 'boot':
+			iter_tupe = (f"UUID={boot_uuid}",
+						str(partition.path),partition.filesystem,"defaults","0","2")
+		elif partition.name == 'boot_efi':
+			iter_tupe = (f"UUID={efi_uuid}",
+						str(partition.path),"vfat","umask=0077","0","1")
 		else:
-			iter_tupe = (f"/dev/mapper/{volume}-{lv_name}",str(path),fs,"defaults","0","2")
+			iter_tupe = (f"/dev/mapper/{volume}-{partition.name}",
+						str(partition.path),partition.filesystem,"defaults","0","2")
+
 		fstab_list.append(iter_tupe)
 
 	device_list = []
@@ -306,44 +314,7 @@ def write_fstab(boot_uuid: str, efi_uuid: str, volume: str, part_list: list):
 	with open(FSTAB_FILE, 'w') as fstab_file:
 		fstab_file.write(FSTAB_HEADER)
 
-		# After our header is written we need our sub_header
-		device, mount, fs, options, dump, _pass = fstab_list.pop(0)
-		print(
-		str(device).ljust(device_width),
-		str(mount).ljust(mount_width),
-		str(fs).ljust(8),
-		str(options).ljust(options_width),
-		str(dump).ljust(8),
-		str(_pass).ljust(2),
-		file=fstab_file
-		)
-
-		# efi, boot and root are always the first 3 entries in that order.
-		# We have to have root as the first entry.
-		device, mount, fs, options, dump, _pass = fstab_list.pop(2)
-		print(
-		str(device).ljust(device_width),
-		str(mount).ljust(mount_width),
-		str(fs).ljust(8),
-		str(options).ljust(options_width),
-		str(dump).ljust(8),
-		str(_pass).ljust(2),
-		file=fstab_file
-		)
-
-		# Now we need to make sure we put our boot entry in there next
-		device, mount, fs, options, dump, _pass = fstab_list.pop(1)
-		print(
-		str(device).ljust(device_width),
-		str(mount).ljust(mount_width),
-		str(fs).ljust(8),
-		str(options).ljust(options_width),
-		str(dump).ljust(8),
-		str(_pass).ljust(2),
-		file=fstab_file
-		)
-
-		# Now we can iterate normally
+		# root, boot, efi should be in that order.
 		for line in fstab_list:
 			device, mount, fs, options, dump, _pass = line
 			print(
@@ -385,7 +356,7 @@ class partition(object):
 		if self.size == '100%FREE':
 			shell.lvcreate._n(self.name, '-l', self.size, '--yes', volume)
 		else:
-			shell.lvcreate._n(self.name, '-L', f'{self.size}b', '--yes', volume)
+			shell.lvcreate._n(self.name, '-L', f'{int(self.size)}b', '--yes', volume)
 
 	def mkfs(self, volume: str=None):
 		device = f"/dev/{volume}/{self.name}"
@@ -407,19 +378,18 @@ class partition(object):
 
 	def mount(self, volume: str=None):
 		device = f"/dev/{volume}/{self.name}"
+
+		if self.efi:
+			device = self.efi
+		if self.boot:
+			device = self.boot
+
 		if self.name == 'root':
 			if ROOT_DIR.exists():
 				eprint("/target already exists. stopping so we don't ruin anything")
 				exit(1)
 			ROOT_DIR.mkdir()
 			mount_path = ROOT_DIR
-
-		elif self.efi:
-			device = self.efi
-			EFI_DIR.mkdir()
-		elif self.boot:
-			device = self.boot
-			BOOT_DIR.mkdir()
 
 		else:
 			mount_path = ROOT_DIR / str(self.path).lstrip('/')

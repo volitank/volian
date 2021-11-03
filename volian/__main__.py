@@ -144,7 +144,7 @@ def main():
 			release="stable"
 
 		sources_list = (
-		"# Installed with https://Project.URL/here\n\n"
+		"# Installed with https://github.com/volitank/volian\n\n"
 		f"deb http://{url}/debian/ {release} main\n"
 		f"deb-src http://{url}/debian/ {release} main\n\n"
 		)
@@ -164,7 +164,7 @@ def main():
 			release="hirsute"
 
 		sources_list = (
-		"# Installed with https://Project.URL/here\n\n"
+		"# Installed with https://github.com/volitank/volian\n\n"
 		f"deb http://{url}/ubuntu {release} main restricted universe multiverse\n"
 		f"deb http://{url}/ubuntu {release}-updates main restricted universe multiverse\n"
 		f"deb http://{url}/ubuntu {release}-backports main restricted universe multiverse\n"
